@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Note Balls</title>
+    <title>Sound Balls</title>
     <style>
         body {
             margin: 0;
@@ -176,7 +176,6 @@
     </div>
 
     <script>
-        // Configuration constants (matching Python)
         const SOUNDS_DIR = "./sounds";
         const DEFAULT_NOTE_FOLDER_NAME = 'piano';
         const RUN_DURATION = 1000.0; // seconds
@@ -304,7 +303,7 @@
                 }
                 
                 // Populate background files
-                bgSelect.innerHTML = '<option value="(none)" selected>(none)</option>';
+                bgSelect.innerHTML = '<option value="rain" selected>rain</option>';
                 if (data.background_files && data.background_files.length > 0) {
                     for (let bgFile of data.background_files) {
                         const option = document.createElement('option');
@@ -800,7 +799,7 @@
         // Load sounds directory
         loadSoundsDirectory();
         
-        console.log('Note Balls Web App initialized');
+        console.log('Sound Balls Web App initialized');
     </script>
 </body>
 </html>
