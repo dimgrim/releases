@@ -21,7 +21,7 @@
             width: 1200px;
             height: 600px;
             border: 2px solid #666;
-            background-color: black;
+            background-color: lightgray;
         }
         .controls {
             background-color: #444;
@@ -40,6 +40,7 @@
             background-color: #555;
             padding: 5px 10px;
             border-radius: 3px;
+            font-size: 12px;
         }
         select, button {
             padding: 5px;
@@ -128,6 +129,10 @@
                     <option value="4">4</option>
                     <option value="5">5</option>
                     <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                    <option value="9">9</option>
+                    <option value="10">10</option>
                 </select>
             </div>
 
@@ -143,6 +148,14 @@
                 <select id="bg-select">
                     <option value="(none)" selected>(none)</option>
                 </select>
+            </div>
+            
+            <div class="control-group">
+                <div class="slider-container">
+                    <span class="slider-label-left">notes</span>
+                    <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5">
+                    <span class="slider-label-right">background</span>
+                </div>
             </div>
 
             <div class="control-group">
@@ -183,9 +196,8 @@
         const HEIGHT = 600;
         const BASE_BALL_RADIUS = 26;
         let BALL_RADIUS = BASE_BALL_RADIUS;
-        const BALL_COLOURS = ['blue', 'yellow', 'red', 'pink', 'violet', 'cyan'];
-        const BACKGROUND_COLOURS = ['black', 'lightblue', 'blue', 'orange'];
-        const BALLQUANTITY = ['1','2','3','4','5','6'];
+        const BALL_COLOURS = ['darkblue', 'yellow', 'red', 'lightpink', 'pink', 'violet', 'cyan', 'lightyellow', 'orange', 'purple'];
+        const BACKGROUND_COLOURS = ['white', 'blue', 'lightblue', 'black'];
         const OCTAVE_SELECTION = [2,4,5,6,7,8];
         const HARMONIC_BALLS = [false, false, false, true, true, true];
         const BASS_OCTAVE = 2;
@@ -223,6 +235,9 @@
         let bgStop = false;
         let currentNoteFolder = DEFAULT_NOTE_FOLDER_NAME;
         
+        // Worker for timing
+        let timingWorker = null;
+        
         // DOM elements
         const keySelect = document.getElementById('key-select');
         const scaleSelect = document.getElementById('scale-select');
@@ -236,6 +251,7 @@
         const startBtn = document.getElementById('start-btn');
         const stopBtn = document.getElementById('stop-btn');
         const statusEl = document.getElementById('status');
+        const volumeSlider = document.getElementById('volume');
         
         // Display values
         document.getElementById('size-value').textContent = sizeSlider.value + 'x';
@@ -253,12 +269,63 @@
                 this.color = color;
                 this.octave = octave;
                 this.harmonic = harmonic;
+                this.prevCollisionTime = 0;
             }
             
             move(dt) {
                 this.x += this.vx * dt;
                 this.y += this.vy * dt;
             }
+        }
+
+        // Initialize timing worker
+        function initTimingWorker() {
+            if (timingWorker) {
+                timingWorker.terminate();
+            }
+            
+            // Create worker blob
+            const workerBlob = new Blob([`
+                let lastTime = null;
+                let running = false;
+                
+                self.addEventListener('message', function(e) {
+                    if (e.data.command === 'start') {
+                        running = true;
+                        lastTime = performance.now() / 1000;
+                        tick();
+                    } else if (e.data.command === 'stop') {
+                        running = false;
+                    }
+                });
+                
+                function tick() {
+                    if (!running) return;
+                    
+                    const now = performance.now() / 1000;
+                    const dt = lastTime ? Math.min(now - lastTime, 0.1) : 0.016;
+                    lastTime = now;
+                    
+                    // Post timing update to main thread
+                    self.postMessage({
+                        type: 'timing',
+                        dt: dt,
+                        now: now
+                    });
+                    
+                    // Schedule next tick with high precision
+                    setTimeout(tick, 16); // ~60fps
+                }
+            `], { type: 'application/javascript' });
+            
+            timingWorker = new Worker(URL.createObjectURL(workerBlob));
+            
+            timingWorker.addEventListener('message', function(e) {
+                if (e.data.type === 'timing' && running) {
+                    // Process physics with the worker's timing
+                    processFrame(e.data.dt, e.data.now);
+                }
+            });
         }
 
         // Initialize audio context on first user interaction
@@ -271,7 +338,7 @@
 
         // Load directory contents from server
         async function loadSoundsDirectory() {
-            statusEl.textContent = 'Loading sounds directory...';
+            statusEl.textContent = 'Loading sounds...';
             
             try {
                 // Try PHP endpoint first, then Python endpoint
@@ -303,7 +370,7 @@
                 }
                 
                 // Populate background files
-                bgSelect.innerHTML = '<option value="rain" selected>rain</option>';
+                //bgSelect.innerHTML = '<option value="rain" selected>rain</option>';
                 if (data.background_files && data.background_files.length > 0) {
                     for (let bgFile of data.background_files) {
                         const option = document.createElement('option');
@@ -352,7 +419,7 @@
             if (noteFiles[folder] && Object.keys(noteFiles[folder]).length > 0) {
                 // Already have mappings from directory listing
                 window.noteFiles = noteFiles[folder];
-                statusEl.textContent = `Loaded ${Object.keys(noteFiles[folder]).length} notes`;
+                statusEl.textContent = `sounds loaded.`;
                 return;
             }
             
@@ -390,10 +457,15 @@
             try {
                 if (!audioContext) await initAudio();
                 
+                // Resume audio context if suspended (happens when tab is inactive)
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                
                 const response = await fetch(path);
                 if (!response.ok) return;
                 
-                const arrayBuffer = await response.arrayBuffer();
+                arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
                 
                 const source = audioContext.createBufferSource();
@@ -402,6 +474,8 @@
                 // Add slight random volume variation
                 const gainNode = audioContext.createGain();
                 gainNode.gain.value = Math.random() * 0.75 + 0.25;
+                // apply volume control
+                gainNode.gain.value *= parseFloat(1-volumeSlider.value);
                 
                 source.connect(gainNode);
                 gainNode.connect(audioContext.destination);
@@ -423,7 +497,9 @@
                 const response = await fetch(path);
                 if (!response.ok) return;
                 
-                const arrayBuffer = await response.arrayBuffer();
+                const gainNode = audioContext.createGain();
+                
+                arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
                 
                 bgStop = false;
@@ -431,9 +507,21 @@
                 const playLoop = () => {
                     if (bgStop || !running) return;
                     
+                    // Resume audio context if suspended
+                    if (audioContext.state === 'suspended') {
+                        audioContext.resume().then(() => {
+                            createAndPlaySource();
+                        });
+                    } else {
+                        createAndPlaySource();
+                    }
+                };
+                
+                const createAndPlaySource = () => {
                     const source = audioContext.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(audioContext.destination);
+                    source.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
                     
                     source.onended = () => {
                         if (!bgStop && running) {
@@ -452,7 +540,6 @@
             }
         }
 
-        // Find note file (matching Python logic)
         function findNoteFile(noteName) {
             // Exact match first
             if (window.noteFiles && window.noteFiles[noteName]) {
@@ -560,88 +647,14 @@
             await loadNoteFiles(currentNoteFolder);
         });
 
-        // Start simulation
-        async function start() {
-            if (running) return;
-            
-            await initAudio();
-            updateScale();
-            
-            const r = BALL_RADIUS;
-            
-            function randPos() {
-                return {
-                    x: Math.random() * (WIDTH - 2 * r) + r,
-                    y: Math.random() * (HEIGHT - 2 * r) + r
-                };
-            }
-            
-            balls = [];
-            const numBalls = parseInt(ballsSelect.value);
-            
-            for (let n = 0; n < numBalls; n++) {
-                const angle = Math.random() * 2 * Math.PI;
-                const speed = parseFloat(melodySpeed.value);
-                const vx = Math.cos(angle) * speed;
-                const vy = Math.sin(angle) * speed;
-                
-                let attempts = 0;
-                const color = BALL_COLOURS[n % BALL_COLOURS.length];
-                
-                while (attempts < 50) {
-                    const pos = randPos();
-                    let overlap = false;
-                    
-                    for (let m = 0; m < balls.length; m++) {
-                        if (Math.hypot(pos.x - balls[m].x, pos.y - balls[m].y) < 2 * r) {
-                            overlap = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!overlap) {
-                        balls.push(new Ball(
-                            pos.x, pos.y, vx, vy, color, 
-                            OCTAVE_SELECTION[n % OCTAVE_SELECTION.length], 
-                            HARMONIC_BALLS[n % HARMONIC_BALLS.length]
-                        ));
-                        break;
-                    }
-                    attempts++;
-                }
-            }
-            
-            running = true;
-            startTime = performance.now() / 1000;
-            lastTime = startTime;
-            
-            // Start background if selected
-            const sel = bgSelect.value;
-            if (sel && sel !== '(none)') {
-                playBackgroundLoop(`${SOUNDS_DIR}/background/${sel}`);
-            }
-            
-            loop();
-        }
-
-        // Stop simulation
-        function stop() {
-            running = false;
-            bgStop = true;
-            if (bgSource) {
-                try {
-                    bgSource.stop();
-                } catch (e) {}
-            }
-        }
-
-        // Main loop
-        function loop() {
+        // Process a single frame with physics
+        function processFrame(dt, now) {
             if (!running) return;
             
-            const now = performance.now() / 1000;
-            const dt = Math.min(now - lastTime, 0.1);
-            lastTime = now;
+            // Ensure audio context is running
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
             
             // Apply speed settings
             if (balls.length > 0) {
@@ -726,14 +739,15 @@
                             other.y += ny * overlap / 2;
                             
                             for (let b of [ball, other]) {
-                                const files = chooseNoteForHit(
-                                    scaleNotes, 
-                                    b.octave, 
-                                    b.harmonic, 
-                                    b.octave === BASS_OCTAVE
-                                );
-                                for (let f of files) {
-                                    if (f) playWavAsync(f);
+                                if (now-b.prevCollisionTime < 0.05) {
+                                    b.prevCollisionTime = now; // Prevent multiple rapid collisions
+                                }
+                                else {
+                                    b.prevCollisionTime = now;
+                                    const files = chooseNoteForHit(scaleNotes, b.octave, b.harmonic, b.octave === BASS_OCTAVE);
+                                    for (let f of files) {
+                                        if (f) playWavAsync(f);
+                                    }
                                 }
                             }
                         }
@@ -759,8 +773,98 @@
                 stop();
                 return;
             }
+        }
+
+        // Start simulation
+        async function start() {
+            if (running) return;
             
-            animationFrame = requestAnimationFrame(loop);
+            await initAudio();
+            
+            // Ensure audio context is running
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+            
+            updateScale();
+            
+            const r = BALL_RADIUS;
+            
+            function randPos() {
+                return {
+                    x: Math.random() * (WIDTH - 2 * r) + r,
+                    y: Math.random() * (HEIGHT - 2 * r) + r
+                };
+            }
+            
+            balls = [];
+            const numBalls = parseInt(ballsSelect.value);
+            
+            for (let n = 0; n < numBalls; n++) {
+                const angle = Math.random() * 2 * Math.PI;
+                const speed = parseFloat(melodySpeed.value);
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed;
+                
+                let attempts = 0;
+                const color = BALL_COLOURS[n % BALL_COLOURS.length];
+                
+                while (attempts < 50) {
+                    const pos = randPos();
+                    let overlap = false;
+                    
+                    for (let m = 0; m < balls.length; m++) {
+                        if (Math.hypot(pos.x - balls[m].x, pos.y - balls[m].y) < 2 * r) {
+                            overlap = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!overlap) {
+                        balls.push(new Ball(
+                            pos.x, pos.y, vx, vy, color, 
+                            OCTAVE_SELECTION[n % OCTAVE_SELECTION.length], 
+                            HARMONIC_BALLS[n % HARMONIC_BALLS.length]
+                        ));
+                        break;
+                    }
+                    attempts++;
+                }
+            }
+            
+            running = true;
+            startTime = performance.now() / 1000;
+            lastTime = startTime;
+            
+            // Initialize and start timing worker
+            initTimingWorker();
+            timingWorker.postMessage({ command: 'start' });
+            
+            // Start background if selected
+            const sel = bgSelect.value;
+            if (sel && sel !== '(none)') {
+                playBackgroundLoop(`${SOUNDS_DIR}/background/${sel}`);
+            }
+        }
+
+        // Stop simulation
+        function stop() {
+            running = false;
+            bgStop = true;
+            if (timingWorker) {
+                timingWorker.postMessage({ command: 'stop' });
+                timingWorker.terminate();
+                timingWorker = null;
+            }
+            if (bgSource) {
+                try {
+                    bgSource.stop();
+                } catch (e) {}
+            }
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
         }
 
         // Event listeners
@@ -787,7 +891,7 @@
         bgSelect.addEventListener('change', updateBackgroundColour);
         
         startBtn.addEventListener('click', function() {
-            if (animationFrame) cancelAnimationFrame(animationFrame);
+            stop(); // Clean up any existing animation
             start();
         });
         
@@ -799,7 +903,7 @@
         // Load sounds directory
         loadSoundsDirectory();
         
-        console.log('Sound Balls Web App initialized');
+        console.log('Sound Balls Web App initialized with Worker timing');
     </script>
 </body>
 </html>
