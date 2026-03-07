@@ -593,12 +593,15 @@
                 if (!harmonic && octave === BASS_OCTAVE) {
                     const rootIdx = Math.floor(Math.random() * scaleNotes.length);
                     const degrees = [rootIdx, (rootIdx + 2) % scaleNotes.length, (rootIdx + 4) % scaleNotes.length];
-                    for (let d of degrees) {
-                        const name = scaleNotes[d];
-                        const octv = String(octave);
+                    const offsets = [0, Math.floor((rootIdx+2)/scaleNotes.length), Math.floor((rootIdx+4)/scaleNotes.length)];
+                    for (let i = 0; i < degrees.length; i++) {
+                        const name = scaleNotes[degrees[i]];
+                        const octv = String(octave+offsets[i]); 
                         chosen.push(findNoteFile(name + octv));
+                        chosen.forEach(element => { console.log(element); });
                     }
-                } else {
+                } 
+                else {
                     const name = scaleNotes[0];
                     const octv = String(octave);
                     chosen.push(findNoteFile(name + octv));
@@ -618,13 +621,7 @@
                 }
                 
             }
-            // if (chosen.length > 0) {
-            //     chosen.forEach(element => {
-            //         console.log(element);
-            //     });
-            // }
 
-            
             return chosen.filter(c => c);
         }
 
