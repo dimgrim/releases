@@ -191,9 +191,8 @@
     <script>
         const SOUNDS_DIR = "./sounds";
         const DEFAULT_NOTE_FOLDER_NAME = 'piano';
-        const RUN_DURATION = 1000.0; // seconds
         const WIDTH = 1200;
-        const HEIGHT = 600;
+        const HEIGHT = WIDTH/2;
         const BASE_BALL_RADIUS = 26;
         let BALL_RADIUS = BASE_BALL_RADIUS;
         const BALL_COLOURS = ['darkblue', 'yellow', 'red', 'lightpink', 'pink', 'violet', 'cyan', 'lightyellow', 'orange', 'purple'];
@@ -222,6 +221,8 @@
         let canvas = document.getElementById('canvas');
         let ctx = canvas.getContext('2d');
         let audioContext = null;
+        let notesVolumeNode = null;
+        let bgVolumeNode = null;
         let noteFiles = {};
         let backgroundFiles = {};
         let noteFolders = [];
@@ -324,6 +325,7 @@
                 if (e.data.type === 'timing' && running) {
                     // Process physics with the worker's timing
                     processFrame(e.data.dt, e.data.now);
+                    processAudio();
                 }
             });
         }
@@ -332,6 +334,10 @@
         function initAudio() {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                bgVolumeNode = audioContext.createGain();
+                bgVolumeNode.connect(audioContext.destination);
+                notesVolumeNode = audioContext.createGain();
+                notesVolumeNode.connect(audioContext.destination);
             }
             return audioContext;
         }
@@ -351,6 +357,7 @@
                 
                 // Populate note folders
                 noteFolders = data.note_folders;
+            
                 folderSelect.innerHTML = '';
                 
                 if (noteFolders.length === 0) {
@@ -370,7 +377,6 @@
                 }
                 
                 // Populate background files
-                //bgSelect.innerHTML = '<option value="rain" selected>rain</option>';
                 if (data.background_files && data.background_files.length > 0) {
                     for (let bgFile of data.background_files) {
                         const option = document.createElement('option');
@@ -431,8 +437,6 @@
                     const noteName = `${note}${octave}`;
                     const possiblePaths = [
                         `${SOUNDS_DIR}/${folder}/${noteName}.wav`,
-                        `${SOUNDS_DIR}/${folder}/Piano.ff.${noteName}.wav`,
-                        `${SOUNDS_DIR}/${folder}/piano.${noteName}.wav`
                     ];
                     
                     for (let path of possiblePaths) {
@@ -473,12 +477,10 @@
                 
                 // Add slight random volume variation
                 const gainNode = audioContext.createGain();
-                gainNode.gain.value = Math.random() * 0.75 + 0.25;
-                // apply volume control
-                gainNode.gain.value *= parseFloat(1-volumeSlider.value);
-                
+                gainNode.gain.value = Math.random() * 0.65 + 0.35;
+                                
                 source.connect(gainNode);
-                gainNode.connect(audioContext.destination);
+                gainNode.connect(notesVolumeNode);
                 
                 source.start();
                 
@@ -497,8 +499,6 @@
                 const response = await fetch(path);
                 if (!response.ok) return;
                 
-                const gainNode = audioContext.createGain();
-                
                 arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
                 
@@ -512,7 +512,8 @@
                         audioContext.resume().then(() => {
                             createAndPlaySource();
                         });
-                    } else {
+                    } 
+                    else {
                         createAndPlaySource();
                     }
                 };
@@ -520,9 +521,8 @@
                 const createAndPlaySource = () => {
                     const source = audioContext.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(gainNode);
-                    gainNode.connect(audioContext.destination);
-                    
+                    source.connect(bgVolumeNode);
+
                     source.onended = () => {
                         if (!bgStop && running) {
                             playLoop();
@@ -539,6 +539,10 @@
                 console.error('Background playback error:', e);
             }
         }
+
+        const setVolume = (value) => {
+            gainNode.gain.setValueAtTime(value, audioContext.currentTime);
+        };
 
         function findNoteFile(noteName) {
             // Exact match first
@@ -599,7 +603,8 @@
                     const octv = String(octave);
                     chosen.push(findNoteFile(name + octv));
                 }
-            } else {
+            } 
+            else {
                 if (!scaleNotes || scaleNotes.length === 0) return [];
                 
                 if (!harmonic) {
@@ -611,7 +616,14 @@
                     const octv = String(octave);
                     chosen.push(findNoteFile(name + octv));
                 }
+                
             }
+            // if (chosen.length > 0) {
+            //     chosen.forEach(element => {
+            //         console.log(element);
+            //     });
+            // }
+
             
             return chosen.filter(c => c);
         }
@@ -646,6 +658,26 @@
             currentNoteFolder = this.value;
             await loadNoteFiles(currentNoteFolder);
         });
+
+
+        function processAudio() {
+            if (!running) return;
+    
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            if (notesVolumeNode) {
+                const notesvolumeValue = parseFloat(1-volumeSlider.value);
+                notesVolumeNode.gain.setValueAtTime(notesvolumeValue, audioContext.currentTime);
+            }
+            if (bgVolumeNode) {
+                const volumeValue = parseFloat(volumeSlider.value);
+                bgVolumeNode.gain.setValueAtTime(volumeValue, audioContext.currentTime);
+            }
+    
+            // Schedule next check
+            setTimeout(processAudio, 1000);
+        }
 
         // Process a single frame with physics
         function processFrame(dt, now) {
@@ -767,15 +799,8 @@
                 ctx.lineWidth = 2;
                 ctx.stroke();
             }
-            
-            // Check duration
-            if (now - startTime >= RUN_DURATION) {
-                stop();
-                return;
-            }
         }
 
-        // Start simulation
         async function start() {
             if (running) return;
             
@@ -876,6 +901,11 @@
             updateBallSize();
         });
         
+        sizeSlider.addEventListener('volumeSlider', function() {
+            document.getElementById('size-value').textContent = this.value + 'x';
+            setVolume(this.value);
+        });
+
         melodySpeed.addEventListener('input', function() {
             document.getElementById('melody-value').textContent = this.value;
         });
